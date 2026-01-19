@@ -1,14 +1,14 @@
 # ChaosBlade JVM Demo
 
-面向 JVM 的故障注入/混沌工程示例项目，基于开源 ChaosBlade 进行改造，提供内嵌式客户端和自动化注入能力。--被测试注入模拟的业务项目暂不开源
+面向 JVM 的故障注入/混沌工程示例项目，基于开源 ChaosBlade 进行改造，提供快速注入平台和自动化注入能力。被测试注入模拟的业务项目暂不开源。
 
 ## 项目概述
 
-本项目在开源 ChaosBlade 的基础上，增加了内嵌式客户端和自动化注入能力，使得在业务应用中集成混沌工程能力更加便捷。架构上分为**执行引擎**与**内嵌客户端**两层：引擎负责字节码增强与实验管理，客户端负责自动发现与远程调用。
+本项目在开源 ChaosBlade 的基础上，提供了独立的快速注入平台（`demo-chaos-app`），使得对运行中的业务应用进行故障注入更加便捷。架构上分为**执行引擎**与**注入平台**两层：引擎负责字节码增强与实验管理，注入平台负责自动发现目标应用、自动注入 Sandbox 和远程调用。
 
 ## 与开源版本的主要区别
 
-### 1. 内嵌式客户端设计
+### 1. 快速注入平台
 
 **开源版本**：
 - 需要独立的客户端工具（如 `blade` 命令行工具）
@@ -16,9 +16,10 @@
 - 需要手动配置 Sandbox 连接信息
 
 **本版本**：
-- 提供内嵌式客户端（`demo-chaos-app`），可直接嵌入业务应用--当然有更好的jar包形式的配置，只需要在业务应用引入Jar包即可
-- 客户端代码与业务代码集成，无需独立部署
-- 支持自动发现和配置 Sandbox 连接信息
+- 提供独立的快速注入平台（`demo-chaos-app`），作为外部工具使用
+- 平台与业务应用完全分离，无需修改业务代码
+- 支持自动发现目标应用、自动注入 Sandbox 和自动配置连接信息
+- 可以打包为 JAR 包，作为独立的注入工具使用
 
 ### 2. 自动化注入机制
 
@@ -81,10 +82,14 @@
 ## 架构总览
 
 ```
-Client (demo-chaos-app)
-  ├─ 自动发现/注入 Sandbox
+注入平台 (demo-chaos-app)
+  ├─ 自动发现目标应用（PID/端口/主类名）
+  ├─ 自动注入 Sandbox 到目标应用
   ├─ 组装实验请求(Delay/Throws/Mock/HTTP/Dubbo)
   └─ HTTP 调用 -> Sandbox 模块
+
+目标业务应用
+  └─ 运行中的 JVM 进程（被注入目标）
 
 Sandbox Module (chaosblade-exec-bootstrap-jvmsandbox)
   ├─ Handler: create/destroy/list/status
@@ -119,21 +124,23 @@ JVM-Sandbox 模块入口，负责将外部请求转化为字节码增强行为�
 
 ### 3. demo-chaos-app
 
-内嵌式客户端示例，承担"自动发现 + 远程调用"职责：
+独立的快速注入平台，承担"自动发现 + 自动注入 + 远程调用"职责：
 
-- **自动发现**：PID 识别、Sandbox 注入、模块激活、端口发现
+- **自动发现目标应用**：通过端口、主类名或 PID 自动查找目标 JVM 进程
+- **自动注入 Sandbox**：自动将 Sandbox 注入到目标应用，无需手动操作
+- **自动激活模块**：自动激活 ChaosBlade 模块并发现 Sandbox 端口
 - **请求模型**：Delay/Throws/Mock/HTTP/Dubbo 请求对象
 - **动态代理**：将接口调用转为 HTTP 请求
 - **智能检测**：检测 Sandbox 是否已注入，避免重复操作
 
 ## 端到端工作流
 
-1. 客户端调用 `SandboxAutoSetup.injectSandboxByPort()` 触发自动发现，完成 Sandbox 注入与端口获取
-2. 创建 `Chaos` 客户端实例
-3. 组装请求模型，调用 `chaos.chaosBlade.create(...)`
-4. Handler 解析请求，创建 Enhancer 与 Matcher
+1. 注入平台调用 `SandboxAutoSetup.injectSandboxByPort()` 自动发现目标应用并注入 Sandbox
+2. 注入平台创建 `Chaos` 客户端实例，连接到目标应用的 Sandbox
+3. 注入平台组装请求模型，调用 `chaos.chaosBlade.create(...)`
+4. Sandbox 模块的 Handler 解析请求，创建 Enhancer 与 Matcher
 5. Listener 拦截目标方法，执行延迟/异常/Mock 动作
-6. 调用 `destroy` 清理实验与增强
+6. 注入平台调用 `destroy` 清理实验与增强
 
 ## 目录结构
 
@@ -146,19 +153,21 @@ chaosblade-jvm-demo/
 │       ├── listener/       # 事件监听
 │       └── matcher/        # 类/方法匹配
 ├── chaosblade-exec-common/ # 公共模型/动作/工具
-└── demo-chaos-app/         # 内嵌客户端示例应用
-    ├── helper/chaos/       # 客户端核心
+└── demo-chaos-app/         # 快速注入平台
+    ├── helper/chaos/       # 平台核心
     │   ├── Chaos.java      # 客户端入口
     │   ├── module/         # 模块接口（ChaosBlade）
     │   ├── model/          # 请求模型
     │   ├── proxy/          # 动态代理
     │   └── util/           # 工具类
-    └── util/               # 应用工具
+    └── util/               # 平台工具
         ├── SandboxAutoSetup.java  # Sandbox 自动注入
         └── RpcAppDiscovery.java   # RPC 应用发现
 ```
 
 ## 快速开始
+
+注入平台作为独立工具使用，可以对运行中的业务应用进行故障注入。以下示例展示如何使用注入平台：
 
 ### 方式一：通过应用端口注入（推荐）
 
@@ -167,18 +176,18 @@ import com.example.helper.chaos.Chaos;
 import com.example.helper.chaos.model.DelayRequest;
 import com.example.util.SandboxAutoSetup;
 
-// 1. 自动注入 Sandbox（通过应用端口）
+// 1. 注入平台自动发现目标应用并注入 Sandbox（通过应用端口）
 int sandboxPort = SandboxAutoSetup.injectSandboxByPort(
-    8080,  // 应用端口
+    8080,  // 目标业务应用的端口
     "com.example.demo.controller.HelloController",
     "hello",
     "127.0.0.1"
 );
 
-// 2. 创建客户端
+// 2. 创建注入平台客户端
 Chaos chaos = new Chaos("127.0.0.1", sandboxPort);
 
-// 3. 注入延迟
+// 3. 对目标应用注入延迟故障
 String id = chaos.chaosBlade.create(
     DelayRequest.of("com.example.demo.controller.HelloController", "hello", 2000)
 );
@@ -190,8 +199,9 @@ chaos.chaosBlade.destroy(id);
 ### 方式二：通过主类名注入
 
 ```java
+// 注入平台通过主类名自动发现目标应用
 int sandboxPort = SandboxAutoSetup.injectSandboxByMainClass(
-    "DemoApplication",  // 主类名
+    "DemoApplication",  // 目标业务应用的主类名
     "com.example.demo.controller.HelloController",
     "hello",
     "127.0.0.1"
@@ -202,8 +212,9 @@ Chaos chaos = new Chaos("127.0.0.1", sandboxPort);
 ### 方式三：直接指定 PID
 
 ```java
+// 注入平台直接使用已知的 PID
 int sandboxPort = SandboxAutoSetup.injectSandbox(
-    12345,  // PID
+    12345,  // 目标业务应用的 PID
     "com.example.demo.controller.HelloController",
     "hello",
     "127.0.0.1"
@@ -261,12 +272,14 @@ DubboProviderRequest.mock("returnValue")
 
 ## 技术特点
 
-1. **零外部依赖**：仅使用 JDK 8+，无需第三方库
-2. **动态代理**：基于 JDK Proxy 实现接口到 HTTP 的转换
-3. **手动 JSON 解析**：使用 JDK 原生 API 实现 JSON 序列化/反序列化
-4. **智能检测**：自动检测 Sandbox 注入状态，避免重复操作
-5. **异步增强**：字节码增强异步执行，快速响应
-6. **配置化**：支持多级配置优先级，灵活配置
+1. **独立平台**：注入平台与业务应用完全分离，无需修改业务代码
+2. **自动化注入**：自动发现目标应用、自动注入 Sandbox、自动激活模块
+3. **零外部依赖**：仅使用 JDK 8+，无需第三方库
+4. **动态代理**：基于 JDK Proxy 实现接口到 HTTP 的转换
+5. **手动 JSON 解析**：使用 JDK 原生 API 实现 JSON 序列化/反序列化
+6. **智能检测**：自动检测 Sandbox 注入状态，避免重复操作
+7. **异步增强**：字节码增强异步执行，快速响应
+8. **配置化**：支持多级配置优先级，灵活配置
 
 
 ## 构建和运行
